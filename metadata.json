@@ -1,0 +1,5 @@
+{
+  "name": "Kyusafe!",
+  "description": "A resilient, high-accessibility disaster evacuation app for Quezon City. Features SOS panic mode, kid-friendly gamification, senior-accessible UI, and offline survival resources.",
+  "requestFramePermissions": ["geolocation", "camera", "microphone"]
+}
