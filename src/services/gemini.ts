@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 
 const getAI = () => {
   // Prioritize the user-selected API key (process.env.API_KEY) over the default one
@@ -442,8 +442,7 @@ export const getSearchSuggestions = async (query: string, lat: number, lng: numb
             }
           },
           required: ["suggestions"]
-        },
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
       },
     });
     return JSON.parse(response.text).suggestions;
@@ -463,12 +462,7 @@ export const searchPlacesNearby = async (query: string, lat?: number, lng?: numb
       model: "gemini-2.5-flash",
       contents: prompt,
       config: {
-        tools: [{ googleMaps: {} }],
-        toolConfig: rLat !== undefined && rLng !== undefined ? {
-          retrievalConfig: {
-            latLng: { latitude: rLat, longitude: rLng }
-          }
-        } : undefined
+        tools: [{ googleMaps: {} }]
       },
     });
     
