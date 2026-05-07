@@ -1,87 +1,24 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { CollapsibleBottomSheet } from './CollapsibleBottomSheet';
+import React, { useState, useEffect } from 'react';
 import { 
   MapContainer, 
   TileLayer, 
   Marker, 
   Popup, 
   Polyline, 
-  Polygon, 
   CircleMarker,
-  useMap,
-  useMapEvents
+  useMap 
 } from 'react-leaflet';
 import L from 'leaflet';
-import 'leaflet-routing-machine';
-import { 
-  MapPin, 
-  AlertTriangle, 
-  Navigation, 
-  Shield, 
-  Hospital, 
-  Flame, 
-  Waves, 
-  Info,
-  Layers,
-  LocateFixed,
-  X,
-  Search,
-  Map as MapIcon,
-  Plus,
-  ChevronRight,
-  Zap,
-  RotateCcw,
-  Compass,
-  Volume2,
-  VolumeX,
-  Navigation2,
-  Activity,
-  Phone
-} from 'lucide-react';
-import { 
-  QC_SHELTERS, 
-  WEST_VALLEY_FAULT_TRACE, 
-  FLOOD_ZONES, 
-  CRITICAL_INFRA, 
-  ACTIVE_ALERTS_MAP,
-  HAZARD_ZONES 
-} from '../constants';
-import { motion, AnimatePresence } from 'motion/react';
-import { searchPlacesNearby, geocodeAddress, analyzeLocation, getSearchSuggestions } from '../services/gemini';
-import { translations, Language } from '../translations';
+import { Search, LocateFixed } from 'lucide-react';
+import { WEST_VALLEY_FAULT_TRACE } from '../constants';
+import { searchPlacesNearby } from '../services/gemini';
 
-// --- Utility Functions ---
-const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat/2) * Math.sin(dLat/2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-};
-
-// --- Custom Icons ---
-const createSearchResultIcon = (index: number) => {
-  return L.divIcon({
-    html: `<div class="relative flex items-center justify-center">
-            <div style="background-color: #3b82f6; width: 32px; height: 32px; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
-              ${index + 1}
-            </div>
-          </div>`,
-    className: 'search-result-icon',
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-  });
-};
-
-// --- Map Controller (The Fix) ---
-const MapController = ({ searchResults, userLocation, isHighHazard, nearestSafeZone }: any) => {
+// --- Map Controller: The "Brain" of the Map ---
+const MapController = ({ searchResults, userLocation, showNavigation }: any) => {
   const map = useMap();
   const [hasInitialCentered, setHasInitialCentered] = useState(false);
 
-  // 1. Initial Center: Only runs once to avoid jumping back to QC Circle
+  // 1. Initial Center: Runs only once when GPS is first acquired
   useEffect(() => {
     if (map && userLocation.lat && !hasInitialCentered) {
       map.setView([userLocation.lat, userLocation.lng], 14);
@@ -89,62 +26,53 @@ const MapController = ({ searchResults, userLocation, isHighHazard, nearestSafeZ
     }
   }, [map, userLocation, hasInitialCentered]);
 
-  // 2. Search Result Focus: Priority over GPS
+  // 2. Search Result Focus: Moves map when search results change
   useEffect(() => {
-    if (!map || searchResults.length === 0) return;
-    const points = searchResults
-      .filter((r: any) => r.lat && r.lng)
-      .map((r: any) => [r.lat, r.lng] as [number, number]);
+    if (!map || searchResults.length === 0 || showNavigation) return;
 
-    if (points.length > 0) {
-      if (points.length === 1) {
-        map.flyTo(points[0], 16, { animate: true, duration: 1.5 });
-      } else {
-        const bounds = L.latLngBounds(points);
-        map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 16 });
-      }
+    const firstResult = searchResults[0];
+    if (firstResult.lat && firstResult.lng) {
+      map.flyTo([firstResult.lat, firstResult.lng], 16, {
+        animate: true,
+        duration: 1.5
+      });
     }
-  }, [searchResults, map]);
+  }, [searchResults, map, showNavigation]);
 
-  // 3. Emergency Focus
+  // 3. Navigation Follow: Keeps user centered during active navigation
   useEffect(() => {
-    if (map && isHighHazard && nearestSafeZone) {
-      map.flyTo([nearestSafeZone.lat, nearestSafeZone.lng], 15);
+    if (showNavigation && map && userLocation.lat) {
+      // Offset center slightly to leave room for bottom sheets/UI
+      const targetPoint = map.project([userLocation.lat, userLocation.lng], map.getZoom());
+      const offsetPoint = targetPoint.add([0, -100]); 
+      const targetLatLng = map.unproject(offsetPoint, map.getZoom());
+      
+      map.panTo(targetLatLng, { animate: true, duration: 1 });
     }
-  }, [isHighHazard, nearestSafeZone, map]);
+  }, [userLocation, showNavigation, map]);
 
   return null;
 };
 
-// --- Main Component ---
-export const HazardMap: React.FC<{ 
-  language?: Language, 
-  autoEvacuate?: boolean,
-  onOpenAiCore?: () => void 
-}> = ({ 
-  language = 'en', 
-  autoEvacuate = false,
-  onOpenAiCore
-}) => {
-  const t = translations[language];
-  
-  // States
-  const [userLocation, setUserLocation] = useState({ lat: 14.6515, lng: 121.0493 }); // QC Circle Default
+export const HazardMap: React.FC<any> = () => {
+  const [userLocation, setUserLocation] = useState({ lat: 14.6515, lng: 121.0493 });
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [showNavigation, setShowNavigation] = useState(false);
   const [map, setMap] = useState<L.Map | null>(null);
 
-  // Auto-location Logic
+  // GPS Watcher
   useEffect(() => {
     if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
+      const id = navigator.geolocation.watchPosition(
         (pos) => {
           setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         },
-        (err) => console.warn("Geolocation fallback used:", err.message),
+        (err) => console.warn(err),
         { enableHighAccuracy: true }
       );
+      return () => navigator.geolocation.clearWatch(id);
     }
   }, []);
 
@@ -155,8 +83,9 @@ export const HazardMap: React.FC<{
     try {
       const results = await searchPlacesNearby(searchQuery, userLocation.lat, userLocation.lng);
       setSearchResults(results || []);
+      setShowNavigation(false); // Reset navigation view on new search
     } catch (err) {
-      console.error("Search failed:", err);
+      console.error(err);
     } finally {
       setIsSearching(false);
     }
@@ -164,24 +93,19 @@ export const HazardMap: React.FC<{
 
   return (
     <div className="relative w-full h-full bg-slate-100 overflow-hidden">
-      {/* Search Header */}
       <div className="absolute top-4 left-4 right-4 z-[1000] max-w-md mx-auto">
-        <form onSubmit={handleSearch} className="relative group">
+        <form onSubmit={handleSearch} className="relative">
           <input 
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search location (e.g. SM City Fairview)"
-            className="w-full h-14 pl-12 pr-4 bg-white/90 backdrop-blur-md border-none rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-500 transition-all"
+            placeholder="Search location..."
+            className="w-full h-14 pl-12 pr-4 bg-white/90 backdrop-blur-md rounded-2xl shadow-2xl focus:ring-2 focus:ring-blue-500"
           />
           <Search className="absolute left-4 top-4 text-slate-400" size={20} />
-          {isSearching && (
-            <div className="absolute right-4 top-4 animate-spin h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full" />
-          )}
         </form>
       </div>
 
-      {/* Map Container */}
       <MapContainer 
         center={[userLocation.lat, userLocation.lng]} 
         zoom={14} 
@@ -189,57 +113,33 @@ export const HazardMap: React.FC<{
         zoomControl={false}
         ref={setMap}
       >
-        <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-          attribution='&copy; OpenStreetMap'
-        />
-
+        <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
+        
         <MapController 
           userLocation={userLocation} 
-          searchResults={searchResults} 
+          searchResults={searchResults}
+          showNavigation={showNavigation}
         />
 
-        {/* User Marker */}
         <CircleMarker 
           center={[userLocation.lat, userLocation.lng]} 
           radius={8}
-          pathOptions={{ fillColor: '#3b82f6', fillOpacity: 1, color: 'white', weight: 3 }}
-        >
-          <Popup>You are here</Popup>
-        </CircleMarker>
+          pathOptions={{ fillColor: '#3b82f6', color: 'white', weight: 3, fillOpacity: 1 }}
+        />
 
-        {/* Search Result Markers */}
         {searchResults.map((result, idx) => (
-          result.lat && (
-            <Marker 
-              key={idx} 
-              position={[result.lat, result.lng]} 
-              icon={createSearchResultIcon(idx)}
-            >
-              <Popup>
-                <div className="p-2">
-                  <h3 className="font-bold text-slate-800">{result.title}</h3>
-                  <button className="mt-2 w-full bg-blue-600 text-white py-1 rounded-lg text-xs">
-                    Get Directions
-                  </button>
-                </div>
-              </Popup>
-            </Marker>
-          )
+          <Marker key={idx} position={[result.lat, result.lng]}>
+            <Popup>{result.title}</Popup>
+          </Marker>
         ))}
 
-        {/* Fault Line Overlay */}
-        <Polyline 
-          positions={WEST_VALLEY_FAULT_TRACE as any} 
-          pathOptions={{ color: '#ef4444', weight: 4, dashArray: '10, 10' }} 
-        />
+        <Polyline positions={WEST_VALLEY_FAULT_TRACE as any} pathOptions={{ color: 'red', dashArray: '10, 10' }} />
       </MapContainer>
 
-      {/* Bottom Actions */}
-      <div className="absolute bottom-8 right-4 z-[1000] flex flex-col gap-3">
+      <div className="absolute bottom-8 right-4 z-[1000]">
         <button 
           onClick={() => map?.flyTo([userLocation.lat, userLocation.lng], 16)}
-          className="p-4 bg-white rounded-2xl shadow-xl text-blue-600 hover:bg-blue-50"
+          className="p-4 bg-white rounded-2xl shadow-xl text-blue-600"
         >
           <LocateFixed size={24} />
         </button>
@@ -247,148 +147,6 @@ export const HazardMap: React.FC<{
     </div>
   );
 };
-
-      // Get initial fix
-      navigator.geolocation.getCurrentPosition(success, error, options);
-      
-      // Start watching
-      const id = navigator.geolocation.watchPosition(success, (e) => console.warn("Watcher error:", e.message), options);
-      setWatchId(id);
-      
-      return () => {
-        if (id) navigator.geolocation.clearWatch(id);
-      };
-    }
-  }, []);
-
-  // Free Data Mode Navigation Instructions
-  useEffect(() => {
-    if (isFreeDataMode && path && showNavigation) {
-      const fetchInstructions = async () => {
-        setIsRouting(true);
-        try {
-          const instructions = await getFreeDataNavigationInstructions(
-            path[0][0], path[0][1], 
-            path[1][0], path[1][1], 
-            selectedPin?.name || selectedPin?.title || "Destination"
-          );
-          setFreeDataInstructions(instructions);
-        } catch (error: any) {
-          const isQuota = error.message?.toLowerCase().includes("quota") || error.message?.includes("429") || error.message?.includes("Failed to fetch");
-          if (!isQuota) {
-            console.error("Error retrieving free data instructions", error);
-          } else {
-            console.warn("Using fallback instructions due to missing/quota API key or network block.");
-          }
-          setFreeDataInstructions(["Unable to fetch instructions. Please proceed with caution."]);
-        } finally {
-          setIsRouting(false);
-        }
-      };
-      fetchInstructions();
-    }
-  }, [isFreeDataMode, path, showNavigation, selectedPin]);
-
-  // Off-route detection and Voice Guidance
-  useEffect(() => {
-    if (showNavigation && routeCoordinates.length > 0 && userLocation.lat && userLocation.lng) {
-      // 1. Find nearest point on route
-      let minDistance = Infinity;
-      let closestIndex = 0;
-      
-      routeCoordinates.forEach((coord, index) => {
-        const dist = calculateDistance(userLocation.lat, userLocation.lng, coord.lat, coord.lng);
-        if (dist < minDistance) {
-          minDistance = dist;
-          closestIndex = index;
-        }
-      });
-
-      // 2. Off-route detection (if > 50 meters away from nearest point)
-      if (minDistance > 0.05 && !isRecalculating) {
-        setIsRecalculating(true);
-        speak("Off route. Recalculating.");
-        // Trigger recalculation by updating path
-        if (selectedPin) {
-          setPath([[userLocation.lat, userLocation.lng], [selectedPin.lat, selectedPin.lng]]);
-        }
-        setTimeout(() => setIsRecalculating(false), 3000);
-      }
-
-      // 3. Voice guidance for next turn
-      if (routeInstructions.length > 0) {
-        const nextTurn = routeInstructions[0];
-        if (nextTurn.distance < 100 && nextTurn.distance > 0) {
-          speak(`In ${Math.round(nextTurn.distance)} meters, ${nextTurn.text}`);
-        } else if (nextTurn.distance < 500 && nextTurn.distance > 400) {
-          speak(`In 500 meters, ${nextTurn.text}`);
-        }
-      }
-    }
-  }, [userLocation, showNavigation, routeCoordinates, routeInstructions]);
-
-  // Auto-center on user during navigation
-  useEffect(() => {
-    if (showNavigation && map && userLocation.lat && userLocation.lng && isFollowing) {
-      // Offset the center slightly so the user is in the lower half of the map
-      // to account for the bottom sheet
-      const targetPoint = map.project([userLocation.lat, userLocation.lng], map.getZoom());
-      const offsetPoint = targetPoint.add([0, -100]); // Offset up by 100 pixels
-      const targetLatLng = map.unproject(offsetPoint, map.getZoom());
-      
-      map.panTo(targetLatLng, { animate: true, duration: 1 });
-    }
-  }, [userLocation, showNavigation, map, isFollowing]);
-
-  // Center on user location initially
-  useEffect(() => {
-    if (userLocation.lat && userLocation.lng && map && !path) {
-      map.setView([userLocation.lat, userLocation.lng], 14);
-    }
-  }, [userLocation.lat, userLocation.lng, map, !!path]);
-
-  // Update path when user moves during navigation
-  useEffect(() => {
-    if (showNavigation && selectedPin && userLocation.lat && userLocation.lng) {
-      setPath([[userLocation.lat, userLocation.lng], [selectedPin.lat, selectedPin.lng]]);
-    }
-  }, [userLocation.lat, userLocation.lng, showNavigation, selectedPin]);
-
-  // Update current segment
-  useEffect(() => {
-    if (routeCoordinates && routeCoordinates.length > 0 && userLocation) {
-      let minDistance = Infinity;
-      let closestIndex = 0;
-      routeCoordinates.forEach((coord, index) => {
-        const dist = calculateDistance(userLocation.lat, userLocation.lng, coord.lat, coord.lng);
-        if (dist < minDistance) {
-          minDistance = dist;
-          closestIndex = index;
-        }
-      });
-      
-      const start = Math.max(0, closestIndex - 5);
-      const end = Math.min(routeCoordinates.length - 1, closestIndex + 5);
-      const segment = routeCoordinates.slice(start, end + 1);
-      setCurrentSegment(segment.map((c: any) => [c.lat, c.lng]));
-    }
-  }, [routeCoordinates, userLocation]);
-
-  // Fly to first search result
-  useEffect(() => {
-    if (searchResults.length > 0 && map) {
-      const firstResult = searchResults[0];
-      if (firstResult.lat && firstResult.lng) {
-        map.flyTo([firstResult.lat, firstResult.lng], 15, {
-          duration: 1.5,
-          easeLinearity: 0.25
-        });
-        
-        // Ensure search results layer is visible
-        setActiveLayers(prev => ({ ...prev, searchResults: true }));
-      }
-    }
-  }, [searchResults, map]);
 
   // Shelter Scoring and Sorting
   const sortedShelters = useMemo(() => {
